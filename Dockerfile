@@ -2,14 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies for opencv and other ML libs
+# System dependencies for opencv, ML libs, and PuLP solver
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
+    coinor-cbc \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
