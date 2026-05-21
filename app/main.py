@@ -40,13 +40,16 @@ app = FastAPI(
 )
 
 app.add_middleware(
+app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://nutribudget-frontend.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 API_V1 = "/api/v1"
 
 app.include_router(auth.router,             prefix=API_V1)
