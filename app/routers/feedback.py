@@ -37,7 +37,7 @@ class FeedbackResponse(BaseModel):
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def submit_feedback(
     payload: FeedbackCreate,
     db:      AsyncSession = Depends(get_db),
