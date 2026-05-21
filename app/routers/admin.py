@@ -33,6 +33,20 @@ async def get_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def _invalidate_recipe_cache():
+    """
+    Invalidate personalization caches after admin uploads change the recipe set.
+    Next /personalize request will rebuild the cache (slower for ONE user,
+    but startup pre-warm makes this rare in practice).
+    """
+    try:
+        from app.services import personalization
+        personalization._RECIPE_VECS_CACHE = None
+        personalization._RECIPE_NAMES_CACHE = None
+    except Exception:
+        pass  # non-fatal
+
+
 # ── POST /admin/upload/products ───────────────────────────────────────────────
 @router.post("/upload/products")
 async def bulk_upload_products(
@@ -100,11 +114,18 @@ async def bulk_upload_recipes(
     Upload egyptian_meals_dataset.csv
     Columns: recipe_id, recipe_name, meal_type,
              ingredients_json, instructions, prep_time
+
+    Invalidates the personalization embedding cache after upload so that
+    the next /personalize request rebuilds it with the new recipes.
     """
     raw = await file.read()
     if len(raw) > MAX_SIZE:
         raise HTTPException(413, "File too large")
     result = await upload_recipes_csv(raw, db)
+
+    # Cache invalidation — new recipes need new embeddings
+    _invalidate_recipe_cache()
+
     return {"status": "ok", "dataset": "recipes", **result}
 
 
