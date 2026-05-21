@@ -20,10 +20,10 @@ logger = logging.getLogger("nutribudget.resolver")
 # Order: local first (fast for dev), HuggingFace second (for deployment),
 # generic fallback last.
 MODEL_PATHS = [
-    Path("models/egyptian_food_matcher"),                       # Local dev (Windows)
-    Path("D:/desktop/claude_GP/models/egyptian_food_matcher"),  # Local dev (absolute)
-    Path("/app/models/egyptian_food_matcher"),                  # Docker container
-    "SaifMamdouh/egyptian-food-matcher",                        # HuggingFace Hub (deployment)
+    "SaifMamdouh/egyptian-food-matcher",                       # HuggingFace (deployment) - try first
+    Path("/app/models/egyptian_food_matcher"),                 # Docker container
+    Path("models/egyptian_food_matcher"),                      # Local dev
+    Path("D:/desktop/claude_GP/models/egyptian_food_matcher"), # Local dev (absolute)
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # Generic fallback
 ]
 
