@@ -1,0 +1,22 @@
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+sqlalchemy==2.0.30
+aiomysql==0.2.0
+alembic==1.13.1
+pydantic[email]==2.7.1
+pydantic-settings==2.2.1
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+cryptography==41.0.7
+python-multipart==0.0.9
+redis==5.0.4
+httpx==0.27.0
+pytest==8.2.0
+pytest-asyncio==0.23.6
+anyio==4.3.0
+# Phase 2.5 — Matching Engine
+rapidfuzz==3.9.3
+sentence-transformers==2.7.0
+torch==2.3.1
+numpy==1.26.4
+scikit-learn==1.5.0

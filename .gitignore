@@ -1,0 +1,31 @@
+# Virtual environments 
+venv/ 
+GP/ 
+gp/ 
+env/ 
+ 
+# Python 
+__pycache__/ 
+*.pyc 
+*.pyo 
+.pytest_cache/ 
+.coverage 
+ 
+# Secrets 
+.env 
+ 
+# AI Models (large files - hosted on HuggingFace) 
+models/egyptian_food_matcher/ 
+ 
+# OS files 
+.DS_Store 
+Thumbs.db 
+ 
+# IDEs 
+.vscode/ 
+.idea/ 
+ 
+# Misc 
+*.log 
+mnt/ 
+__pycache__ 

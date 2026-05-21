@@ -1,0 +1,21 @@
+normalized_name,display_name,calories_per_100g,protein_g,carbs_g,fats_g,fiber_g,data_source
+tomato,Fresh Tomato,18,0.9,3.9,0.2,1.2,usda
+chicken breast,Chicken Breast,165,31.0,0.0,3.6,0.0,usda
+beef,Ground Beef,250,26.0,0.0,17.0,0.0,usda
+milk,Full Cream Milk,61,3.2,4.8,3.3,0.0,usda
+egg,Chicken Egg,155,13.0,1.1,11.0,0.0,usda
+banana,Banana,89,1.1,22.8,0.3,2.6,usda
+apple,Apple,52,0.3,14.0,0.2,2.4,usda
+potato,Potato,77,2.0,17.0,0.1,2.2,usda
+bread white,White Bread,265,9.0,49.0,3.2,2.7,usda
+rice white,White Rice,130,2.7,28.0,0.3,0.4,usda
+yoghurt,Plain Yoghurt,59,3.5,4.7,3.3,0.0,usda
+cucumber,Fresh Cucumber,16,0.7,3.6,0.1,0.5,usda
+carrot,Carrot,41,0.9,10.0,0.2,2.8,usda
+onion,Onion,40,1.1,9.3,0.1,1.7,usda
+lentil,Red Lentils,116,9.0,20.0,0.4,7.9,usda
+pasta,Pasta Cooked,131,5.0,25.0,1.1,1.8,usda
+cheese,Cheddar Cheese,402,25.0,1.3,33.0,0.0,usda
+orange,Orange,47,0.9,12.0,0.1,2.4,usda
+spinach,Fresh Spinach,23,2.9,3.6,0.4,2.2,usda
+tuna,Canned Tuna,116,26.0,0.0,1.0,0.0,usda

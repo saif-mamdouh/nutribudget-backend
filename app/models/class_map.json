@@ -1,0 +1,13 @@
+{
+  "Bread": 0,
+  "Dairy product": 1,
+  "Dessert": 2,
+  "Egg": 3,
+  "Fried food": 4,
+  "Meat": 5,
+  "Noodles-Pasta": 6,
+  "Rice": 7,
+  "Seafood": 8,
+  "Soup": 9,
+  "Vegetable-Fruit": 10
+}
