@@ -5,17 +5,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import engine, Base
+from app.database import engine, Base, AsyncSessionLocal
 from app.routers import auth, users, products, matching, optimizer, personalize, vision
-from app.routers import recipes, admin   # ← NEW
-from app.routers import profile_pipeline  # ← Layer 1+2
-from app.routers import personalize          # ← Personalization
-from app.routers import chat                 # ← AI Chat with history
-from app.routers import feedback             # ← User feedback / app rating
+from app.routers import recipes, admin
+from app.routers import profile_pipeline
+from app.routers import personalize
+from app.routers import chat
+from app.routers import feedback
 
-# Register ALL models before create_all
 from app.models import user, product, nutrition, mapping, meal_plan  # noqa: F401
-from app.models import recipe, ingredient_map                # ← NEW
+from app.models import recipe, ingredient_map
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nutribudget")
@@ -27,6 +26,28 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("✅ Database tables verified.")
+
+    # Pre-warm MiniLM model + recipe embeddings cache
+    try:
+        from app.services.nlp_parser import _NLPModel
+        from app.services.meal_optimizer import _load_priced_recipes
+        from app.services import personalization
+
+        logger.info("⏳ Pre-loading MiniLM model...")
+        model = _NLPModel.get()
+        logger.info("✅ MiniLM model loaded.")
+
+        logger.info("⏳ Pre-computing recipe embeddings...")
+        async with AsyncSessionLocal() as db:
+            recipes_data = await _load_priced_recipes(db)
+            if recipes_data:
+                names = [r["recipe_name"] for r in recipes_data]
+                personalization._RECIPE_VECS_CACHE = model.encode(names, convert_to_numpy=True)
+                personalization._RECIPE_NAMES_CACHE = names
+                logger.info(f"✅ Cached embeddings for {len(names)} recipes")
+    except Exception as e:
+        logger.warning(f"⚠️ Pre-warm skipped: {e}")
+
     yield
     logger.info("🛑 Shutting down.")
     await engine.dispose()
