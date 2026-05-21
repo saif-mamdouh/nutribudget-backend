@@ -15,7 +15,7 @@ from app.routers import feedback             # ← User feedback / app rating
 
 # Register ALL models before create_all
 from app.models import user, product, nutrition, mapping, meal_plan  # noqa: F401
-from app.models import recipe, ingredient_map                         # ← NEW
+from app.models import recipe, ingredient_map, feedback                         # ← NEW
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nutribudget")
