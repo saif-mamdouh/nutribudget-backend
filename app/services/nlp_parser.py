@@ -1,27 +1,26 @@
 """
-services/nlp_parser.py  (v3 — Pre-trained Models, No API, No Training)
+services/nlp_parser.py  (v4 — Unified Singleton, RAM-Optimized)
 ────────────────────────────────────────────────────────────────────────
 Layer 1: NLP Input Understanding
+
+v4 Changes (OOM Fix):
+  - Model loads lazily (not at startup)
+  - Tries SaifMamdouh/egyptian-food-matcher first (fine-tuned)
+  - Falls back to paraphrase-multilingual-MiniLM-L12-v2 (base)
+  - ONE model shared across nlp_parser + personalization
+    (smart_ingredient_resolver has its own singleton — different use case)
 
 Architecture:
   Component A — Regex NER
     Extracts: age, weight, height, gender, budget
     Accuracy: ~100% for well-formed Arabic/English input
 
-  Component B — paraphrase-multilingual-MiniLM-L12-v2
+  Component B — MiniLM (fine-tuned Egyptian food model)
     Task:   Zero-shot classification (goal + activity_level)
     Method: Cosine similarity between user text embedding
             and pre-defined class description embeddings
-    Size:   ~120MB  |  Offline  |  No training needed
+    Size:   ~470MB  |  Offline  |  No training needed
     Arabic support: Yes (trained on 50+ languages)
-
-DO YOU NEED TO TRAIN IT? → NO
-  This model is already pre-trained on 50+ languages including Arabic.
-  We use it for ZERO-SHOT classification:
-    - Encode user text → embedding vector
-    - Encode class descriptions → embedding vectors
-    - Pick class with highest cosine similarity
-  No fine-tuning, no labeled data, no training loop.
 
 Papers:
   Reimers & Gurevych (2019) — Sentence-BERT (EMNLP)
@@ -41,17 +40,24 @@ logger = logging.getLogger("nutribudget.nlp")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Singleton — model loads once, reused for all requests
+# Singleton — loads lazily on first request, reused forever after
+# Tries fine-tuned Egyptian model first, falls back to base
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _NLPModel:
     _instance = None
     _lock     = threading.Lock()
-    MODEL_ID  = "paraphrase-multilingual-MiniLM-L12-v2"
 
-    # Pre-computed class embeddings (built once on first request)
+    # Model priority: fine-tuned first → base fallback
+    MODEL_PATHS = [
+        "SaifMamdouh/egyptian-food-matcher",                        # fine-tuned ✅
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # fallback
+    ]
+
+    # Pre-computed class embeddings (built once after model loads)
     _goal_embs:     Optional[dict] = None
     _activity_embs: Optional[dict] = None
+    _model_source:  Optional[str]  = None
 
     @classmethod
     def get(cls):
@@ -59,17 +65,28 @@ class _NLPModel:
             with cls._lock:
                 if cls._instance is None:
                     from sentence_transformers import SentenceTransformer
-                    logger.info(f"📦 Loading {cls.MODEL_ID} ...")
-                    cls._instance = SentenceTransformer(cls.MODEL_ID)
+                    for path in cls.MODEL_PATHS:
+                        try:
+                            logger.info(f"📦 Loading {path} ...")
+                            cls._instance    = SentenceTransformer(path)
+                            cls._model_source = path
+                            logger.info(f"✅ NLP model ready: {path}")
+                            break
+                        except Exception as e:
+                            logger.warning(f"Model not available at {path}: {e}")
+
+                    if cls._instance is None:
+                        raise RuntimeError("No NLP model could be loaded!")
+
+                    # Build class embeddings once
                     cls._goal_embs     = _build_class_embeddings(cls._instance, GOAL_CLASSES)
                     cls._activity_embs = _build_class_embeddings(cls._instance, ACTIVITY_CLASSES)
-                    logger.info("✅ NLP model ready.")
+
         return cls._instance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Class descriptions — Arabic (EGY + MSA) + English
-# More phrases = better embedding centroid = better accuracy
 # ─────────────────────────────────────────────────────────────────────────────
 
 GOAL_CLASSES = {
@@ -140,10 +157,6 @@ ACTIVITY_CLASSES = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_class_embeddings(model, class_dict: dict) -> dict:
-    """
-    For each class: encode all phrases → average → one embedding vector.
-    This gives a robust centroid representation of each class.
-    """
     result = {}
     for label, phrases in class_dict.items():
         vecs = model.encode(phrases, convert_to_numpy=True)
@@ -152,32 +165,25 @@ def _build_class_embeddings(model, class_dict: dict) -> dict:
 
 
 def _cosine_classify(text: str, model, class_embeddings: dict) -> Tuple[str, float]:
-    """
-    Encode text → compare cosine similarity to all class embeddings.
-    Returns (best_label, confidence_score 0-1).
-    """
     text_vec = model.encode([text], convert_to_numpy=True)[0]
-
     scores = {}
     for label, class_vec in class_embeddings.items():
-        dot    = np.dot(text_vec, class_vec)
-        norms  = np.linalg.norm(text_vec) * np.linalg.norm(class_vec)
+        dot   = np.dot(text_vec, class_vec)
+        norms = np.linalg.norm(text_vec) * np.linalg.norm(class_vec)
         scores[label] = float(dot / norms) if norms > 0 else 0.0
-
     best = max(scores, key=scores.get)
     logger.debug(f"Scores: {scores} → {best}")
     return best, round(scores[best], 3)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Component A: Regex NER — structured numeric extraction
+# Component A: Regex NER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _regex_extract(text: str) -> dict:
     t   = text.lower().strip()
     out = {}
 
-    # ── Age ───────────────────────────────────────────────────────────────────
     for pat in [
         r'(\d{1,2})\s*(سن[ةه]|سنين|عام|أعوام|year)',
         r'(عمر[يه]?|عند[يه]?|age\s*[:=]?)\s*(\d{1,2})',
@@ -190,7 +196,6 @@ def _regex_extract(text: str) -> dict:
                 out['age'] = int(nums[0])
                 break
 
-    # ── Weight ────────────────────────────────────────────────────────────────
     for pat in [
         r'(\d{2,3})\s*(كيل[وا]|kg\b|كجم)',
         r'(وزن[يه]?)\s*(\d{2,3})',
@@ -202,7 +207,6 @@ def _regex_extract(text: str) -> dict:
                 out['weight_kg'] = float(nums[0])
                 break
 
-    # ── Height ────────────────────────────────────────────────────────────────
     for pat in [
         r'(\d{3})\s*(سم|cm\b|سنتي)',
         r'(طول[يه]?)\s*(\d{3})',
@@ -214,18 +218,15 @@ def _regex_extract(text: str) -> dict:
                 out['height_cm'] = float(nums[0])
                 break
 
-    # Feet/inches → cm
     m = re.search(r"(\d+)\s*['\u2019]\s*(\d+)\s*\"", t)
     if m and 'height_cm' not in out:
         out['height_cm'] = round(int(m.group(1)) * 30.48 + int(m.group(2)) * 2.54, 1)
 
-    # ── Gender ────────────────────────────────────────────────────────────────
     if re.search(r'\bولد\b|رجل|ذكر|\bmale\b|\bman\b', t):
         out['gender'] = 'male'
     elif re.search(r'\bبنت\b|\bست\b|أنثى|\bfemale\b|\bwoman\b', t):
         out['gender'] = 'female'
 
-    # ── Budget ────────────────────────────────────────────────────────────────
     m = re.search(r'(\d{2,4})\s*(جنيه|egp|جنيهات)', t)
     if m:
         out['budget_egp'] = float(m.group(1))
@@ -233,12 +234,7 @@ def _regex_extract(text: str) -> dict:
     return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Keyword fallback (if transformer unavailable)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _keyword_classify(text: str) -> tuple[str, str]:
-    """Simple keyword fallback for goal + activity."""
     t = text.lower()
     goal = "general_health"
     if re.search(r'أنزل|تخسيس|رجيم|lose.weight|slim', t):
@@ -266,18 +262,9 @@ def _keyword_classify(text: str) -> tuple[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def parse_user_text(text: str) -> ParsedProfile:
-    """
-    Full NLP pipeline — no API, no training required.
-
-    Component A (Regex):     age, weight, height, gender, budget
-    Component B (MiniLM):    goal, activity_level
-    """
-
-    # ── Component A: Regex ────────────────────────────────────────────────────
     numeric = _regex_extract(text)
     logger.info(f"Regex extracted {len(numeric)} fields: {list(numeric.keys())}")
 
-    # ── Component B: Pre-trained Transformer ──────────────────────────────────
     goal = activity = None
     goal_conf = activity_conf = 0.5
 
@@ -291,7 +278,6 @@ async def parse_user_text(text: str) -> ParsedProfile:
         logger.warning(f"Transformer unavailable: {e} — using keyword fallback")
         goal, activity = _keyword_classify(text)
 
-    # ── Confidence ────────────────────────────────────────────────────────────
     key_fields  = ['age', 'weight_kg', 'height_cm', 'gender']
     regex_score = sum(1 for k in key_fields if k in numeric) / len(key_fields)
     confidence  = round(min(0.95, regex_score * 0.6 + goal_conf * 0.2 + activity_conf * 0.2), 2)
