@@ -4,11 +4,10 @@ app/services/smart_ingredient_resolver.py
 Uses the Egyptian fine-tuned MiniLM model to find the best
 product match for each recipe ingredient.
 
-v3 Fix — Infinite encoding loop:
-  - Added _products_warmed flag: warm_products runs ONCE then stops
-  - Added _RESULT_CACHE_MAX to prevent memory leak
-  - show_progress_bar=False in all encode calls
-  - Product embeddings persist across requests (singleton cache)
+v4 — Precomputed Embeddings Cache:
+  - Loads product_embeddings.npz at startup (instant, no encoding)
+  - Falls back to on-demand encoding if file not found
+  - No more 6-hour warming loop!
 """
 
 import logging
@@ -19,14 +18,21 @@ from typing import Optional
 logger = logging.getLogger("nutribudget.resolver")
 
 MODEL_PATHS = [
-    "SaifMamdouh/egyptian-food-matcher",                        # HuggingFace (deployment)
-    Path("/app/models/egyptian_food_matcher"),                  # Docker
-    Path("models/egyptian_food_matcher"),                       # Local dev
-    Path("D:/desktop/claude_GP/models/egyptian_food_matcher"),  # Local dev (absolute)
-    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",  # Fallback
+    "SaifMamdouh/egyptian-food-matcher",
+    Path("/app/models/egyptian_food_matcher"),
+    Path("models/egyptian_food_matcher"),
+    Path("D:/desktop/claude_GP/models/egyptian_food_matcher"),
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 ]
 
-_RESULT_CACHE_MAX = 1000  # max entries to prevent memory leak
+# Path to precomputed embeddings file
+EMBEDDINGS_FILE_PATHS = [
+    Path("/app/data/product_embeddings.npz"),       # Railway/Docker
+    Path("data/product_embeddings.npz"),             # Local dev
+    Path("D:/desktop/claude_GP/data/product_embeddings.npz"),  # Local absolute
+]
+
+_RESULT_CACHE_MAX = 1000
 
 
 class SmartIngredientResolver:
@@ -51,10 +57,9 @@ class SmartIngredientResolver:
         self._ing_cache:    dict[str, np.ndarray] = {}
         self._prod_cache:   dict[str, np.ndarray] = {}
         self._result_cache: dict[str, str]        = {}
+        self._products_warmed: bool               = False
 
-        # ── NEW: flag to prevent re-warming products on every request ─────────
-        self._products_warmed: bool = False
-
+        # ── Load model ────────────────────────────────────────────────────────
         for path in MODEL_PATHS:
             try:
                 self._model  = SentenceTransformer(str(path))
@@ -67,10 +72,39 @@ class SmartIngredientResolver:
         if self._model is None:
             logger.warning("⚠️  SmartResolver: no model — using price-only matching")
 
+        # ── Load precomputed product embeddings ───────────────────────────────
+        self._load_precomputed_embeddings()
+
         self._initialized = True
 
+    def _load_precomputed_embeddings(self):
+        """Load precomputed product embeddings from .npz file if available."""
+        for emb_path in EMBEDDINGS_FILE_PATHS:
+            if not emb_path.exists():
+                continue
+            try:
+                data = np.load(emb_path, allow_pickle=True)
+                names      = list(data['product_names'])
+                embeddings = data['embeddings']
+
+                for name, emb in zip(names, embeddings):
+                    self._prod_cache[str(name)] = emb
+
+                self._products_warmed = True
+                logger.info(
+                    f"✅ Loaded precomputed embeddings: {len(self._prod_cache)} products "
+                    f"from {emb_path} — no warming needed!"
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load precomputed embeddings from {emb_path}: {e}")
+
+        logger.info(
+            "ℹ️  No precomputed embeddings file found — "
+            "will encode on-demand. Run scripts/precompute_product_embeddings.py to fix."
+        )
+
     def warm_ingredients(self, ingredient_keys: list[str]) -> None:
-        """Pre-encode all ingredient keys in one batch."""
         if self._model is None:
             return
         new_keys = [k for k in ingredient_keys if k not in self._ing_cache]
@@ -79,7 +113,7 @@ class SmartIngredientResolver:
         try:
             embs = self._model.encode(
                 new_keys, normalize_embeddings=True,
-                batch_size=64, show_progress_bar=False  # ← always False
+                batch_size=64, show_progress_bar=False
             )
             for k, emb in zip(new_keys, embs):
                 self._ing_cache[k] = emb
@@ -88,56 +122,37 @@ class SmartIngredientResolver:
             logger.warning("warm_ingredients failed: %s", e)
 
     def warm_products(self, product_names: list[str]) -> None:
-        """
-        Pre-encode product names in batch.
-
-        v3 fix: only encodes NEW names (not already in cache).
-        Once all products are encoded, subsequent calls are no-ops.
-        """
+        """Encode missing product names on-demand (only if not precomputed)."""
         if self._model is None:
             return
 
-        # ── KEY FIX: skip if already warmed all products ──────────────────────
-        if self._products_warmed:
-            return
-
+        # If precomputed file was loaded → only encode truly missing products
         new_names = [n for n in product_names if n not in self._prod_cache]
         if not new_names:
-            self._products_warmed = True  # mark done
             return
 
         try:
             embs = self._model.encode(
                 new_names, normalize_embeddings=True,
-                batch_size=64, show_progress_bar=False  # ← always False
+                batch_size=64, show_progress_bar=False
             )
             for n, emb in zip(new_names, embs):
                 self._prod_cache[n] = emb
-            logger.info("🔥 Warmed %d product embeddings (total cached: %d)",
-                        len(new_names), len(self._prod_cache))
 
-            # Mark as fully warmed once we've processed a large batch
-            # (2000+ products = all products in DB)
-            if len(self._prod_cache) >= 500:
+            # Mark as warmed after encoding a reasonable batch
+            if len(self._prod_cache) >= 50:
                 self._products_warmed = True
-                logger.info("✅ Product cache complete (%d products) — no more warming needed",
-                            len(self._prod_cache))
 
         except Exception as e:
             logger.debug("warm_products failed: %s", e)
 
     def best_match_idx(self, ingredient: str, candidates: list, product_names: list) -> int:
-        """
-        Returns index of best-matching candidate.
-        Uses cached embeddings — no encode call if already warmed.
-        Falls back to 0 (first / cheapest) if model unavailable.
-        """
         if not self._initialized:
             self.initialize()
         if self._model is None or not product_names:
             return 0
 
-        # Result cache check (fastest path)
+        # Result cache (fastest path)
         cache_key = f"{ingredient}|{'|'.join(product_names[:5])}"
         if cache_key in self._result_cache:
             cached_name = self._result_cache[cache_key]
@@ -156,7 +171,7 @@ class SmartIngredientResolver:
                 )
                 self._ing_cache[ingredient] = ing_emb
 
-            # Product embeddings — batch-encode any missing
+            # Product embeddings
             missing = [n for n in product_names if n not in self._prod_cache]
             if missing:
                 self.warm_products(missing)
@@ -179,15 +194,12 @@ class SmartIngredientResolver:
                 key=lambda i: float(candidates[i].price_per_100g)
             ))
 
-            # Cache result (with size limit)
-            if len(self._result_cache) < _RESULT_CACHE_MAX:
-                self._result_cache[cache_key] = product_names[best_idx]
-            elif len(self._result_cache) >= _RESULT_CACHE_MAX:
-                # Simple eviction: clear half the cache
+            # Cache result
+            if len(self._result_cache) >= _RESULT_CACHE_MAX:
                 keys = list(self._result_cache.keys())
                 for k in keys[:_RESULT_CACHE_MAX // 2]:
                     del self._result_cache[k]
-                self._result_cache[cache_key] = product_names[best_idx]
+            self._result_cache[cache_key] = product_names[best_idx]
 
             return best_idx
 
@@ -221,11 +233,10 @@ class SmartIngredientResolver:
         return np.array(embs)
 
     def clear_cache(self):
-        """Clear all caches (call after DB updates)."""
         self._ing_cache.clear()
         self._prod_cache.clear()
         self._result_cache.clear()
-        self._products_warmed = False  # allow re-warming after DB update
+        self._products_warmed = False
         logger.info("SmartResolver caches cleared")
 
     @property
