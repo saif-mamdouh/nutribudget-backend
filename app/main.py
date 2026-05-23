@@ -45,6 +45,7 @@ app = FastAPI(
     version=settings.APP_VERSION,
     description="Cost-optimised, nutritionally balanced meal plans for Egypt.",
     lifespan=lifespan,
+    redirect_slashes=False,  # ← السطر الجديد
 )
 
 app.add_middleware(
