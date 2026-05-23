@@ -56,7 +56,7 @@ async def upload_csv(
 
 
 # ── GET /products ─────────────────────────────────────────────────────────────
-@router.get("/", response_model=dict)
+@router.get("", response_model=dict)
 async def list_products(
     category:  Optional[str]   = Query(None),
     source:    Optional[str]   = Query(None),
